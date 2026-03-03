@@ -313,7 +313,7 @@ func PacketServe(clientConn net.PacketConn, assocHandle AssociationHandleFunc, m
 					go func() {
 						assocHandle(ctx, assoc)
 						metrics.RemoveNATEntry()
-						close(assoc.doneCh)
+						_ = assoc.Close()
 					}()
 				}
 			}
@@ -347,21 +347,23 @@ type association struct {
 	clientAddr net.Addr
 	readCh     chan *packet
 	doneCh     chan struct{}
+	closeOnce  sync.Once
 }
 
 var _ net.Conn = (*association)(nil)
 
 func (a *association) Read(p []byte) (int, error) {
-	pkt, ok := <-a.readCh
-	if !ok {
+	select {
+	case <-a.doneCh:
 		return 0, net.ErrClosed
+	case pkt := <-a.readCh:
+		n := copy(p, pkt.payload)
+		pkt.done()
+		if n < len(pkt.payload) {
+			return n, io.ErrShortBuffer
+		}
+		return n, nil
 	}
-	n := copy(p, pkt.payload)
-	pkt.done()
-	if n < len(pkt.payload) {
-		return n, io.ErrShortBuffer
-	}
-	return n, nil
 }
 
 func (a *association) Write(b []byte) (n int, err error) {
@@ -369,7 +371,11 @@ func (a *association) Write(b []byte) (n int, err error) {
 }
 
 func (a *association) Close() error {
-	close(a.readCh)
+	a.closeOnce.Do(func() {
+		if a.doneCh != nil {
+			close(a.doneCh)
+		}
+	})
 	return nil
 }
 
