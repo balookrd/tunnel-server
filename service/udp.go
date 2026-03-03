@@ -177,14 +177,16 @@ func (h *associationHandler) HandleAssociation(ctx context.Context, clientConn n
 				var keyID string
 				textLazySlice := readBufPool.LazySlice()
 				unpackStart := time.Now()
-				textData, keyID, cryptoKey, err = findAccessKeyUDP(ip, textLazySlice.Acquire(), pkt, h.ciphers, h.logger)
+				textBuf := textLazySlice.Acquire()
+				textData, keyID, cryptoKey, err = findAccessKeyUDP(ip, textBuf, pkt, h.ciphers, h.logger)
 				timeToCipher := time.Since(unpackStart)
-				textLazySlice.Release()
 				h.ssm.AddCipherSearch(err == nil, timeToCipher)
 
 				if err != nil {
+					textLazySlice.Release()
 					return onet.NewConnectionError("ERR_CIPHER", "Failed to unpack initial packet", err)
 				}
+				defer textLazySlice.Release()
 				assocMetrics.AddAuthentication(keyID)
 
 				var onetErr *onet.ConnectionError
